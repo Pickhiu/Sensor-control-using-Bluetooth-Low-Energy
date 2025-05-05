@@ -1,0 +1,246 @@
+#include <Arduino.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+#include <ArduinoJson.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+int sensor1 = 32;         
+bool prezenta = 0;             
+int val = 0;              
+int sensor2 = 27;
+
+#define bleServerName "BLE_A31_sensor4"
+
+bool deviceConnected = false;
+
+#define SERVICE_UUID "8a6df116-fa4d-11ed-be56-0242ac120002"
+#define CHARACTERISTIC_UUID "423b0ef0-fa4e-11ed-be56-0242ac120002"
+
+BLECharacteristic characteristic(
+  CHARACTERISTIC_UUID,
+  BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY
+);
+
+BLEDescriptor *characteristicDescriptor = new BLEDescriptor(BLEUUID((uint16_t)0x2902));
+
+class MyServerCallbacks: public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    deviceConnected = true;
+    Serial.println("Device connected");
+  };
+  void onDisconnect(BLEServer* pServer) {
+    deviceConnected = false;
+    Serial.println("Device disconnected");
+  }
+};
+
+void getSensors(BLECharacteristic *characteristic, const JsonDocument& jsonDoc)
+{
+      
+      DynamicJsonDocument jsonResponse (1500);
+      JsonArray parameterArray = jsonResponse.createNestedArray("parameters");
+      JsonObject parameterObject = parameterArray.createNestedObject();
+      parameterObject["parameter"] = "Prezenta Gaz";
+      parameterObject["unit"] = "";
+      jsonResponse["type"] = "MQ-2";
+      jsonResponse["interface"] = "Digital";
+      jsonResponse["pin"] = 32;
+      jsonResponse["id"] = 1;
+      jsonResponse["teamId"] = "A31" ;
+      
+      DynamicJsonDocument jsonResponse2 (1500);
+      JsonArray parameterArray2 = jsonResponse2.createNestedArray("parameters");
+
+      JsonObject parameterObject2 = parameterArray2.createNestedObject();
+      parameterObject2["parameter"] = "Intensitate Luminoasa";
+      parameterObject2["unit"] = "-";
+      jsonResponse2["type"] = "Light Sensor Module";
+      jsonResponse2["pin"] = 27;
+      jsonResponse2["interface"] = "Analog";
+      jsonResponse2["id"] = 2;
+      jsonResponse2["teamId"] = "A31";
+
+      String jsonString;
+      String jsonString2;
+      serializeJson(jsonResponse, jsonString);
+      serializeJson(jsonResponse2, jsonString2);
+
+      Serial.println(jsonString);
+
+      characteristic->setValue(jsonString.c_str());
+      characteristic->notify();
+      characteristic->setValue(jsonString2.c_str());
+      characteristic->notify();
+}
+
+
+void gaz(BLECharacteristic *characteristic, const JsonDocument& jsonDoc)
+{
+
+  int id_sensor = jsonDoc["id"];
+  DynamicJsonDocument responseDoc(1500);
+  JsonObject responseObj = responseDoc.to<JsonObject>();
+
+  prezenta = digitalRead(sensor1);  
+
+  Serial.println(prezenta);
+  
+  if (prezenta == 0) {         
+   
+      Serial.println(prezenta);
+      Serial.println("s a  detectat");
+      responseObj["teamId"] = "A31";
+      responseObj["id"] = id_sensor;
+      JsonObject responseObject1 = responseObj.createNestedObject("values");
+      responseObject1["Prezenta Gaz"] = 1;
+
+      String responseString;
+      serializeJson(responseDoc, responseString);
+
+       characteristic->setValue(responseString.c_str());
+      characteristic->notify();
+
+    }
+
+    
+   
+
+
+
+  else {
+      
+    Serial.println("nu");
+
+    responseObj["teamId"] = "A31";
+      responseObj["id"] = id_sensor;
+      JsonObject responseObject1 = responseObj.createNestedObject("values");
+      responseObject1["Prezenta Gaz"] = 0;
+
+      String responseString;
+      serializeJson(responseDoc, responseString);
+
+       characteristic->setValue(responseString.c_str());
+      characteristic->notify();
+    
+  }
+}
+
+
+void lumina1(BLECharacteristic *pcharacteristic, const JsonDocument& jsonDoc)
+{     
+      int id_sensor = jsonDoc["id"];
+      int sensorValue = analogRead(sensor2);
+      Serial.print("Valoarea este de: ");
+      Serial.println(sensorValue);
+      
+      DynamicJsonDocument responseDoc(1500);
+      JsonObject responseObj = responseDoc.to<JsonObject>();
+      
+      responseObj["teamId"] = "A31";
+      responseObj["id"] = id_sensor;
+      JsonObject responseObject1 = responseObj.createNestedObject("values");
+      responseObject1["Intensitate Luminoasa"] = sensorValue;
+
+      String responseString;
+      serializeJson(responseDoc, responseString);
+
+      pcharacteristic->setValue(responseString.c_str());
+      pcharacteristic->notify();
+}
+
+void lumina2(BLECharacteristic *pcharacteristic, const JsonDocument& jsonDoc)
+{     
+      int number = jsonDoc["number"];
+      int id_sensor = jsonDoc["id"];
+
+    float x=0;
+
+    for(int i = 0; i<number; i++)
+    {
+      x += analogRead(sensor2);
+      delay(500);
+    }
+
+     x=x/number;
+
+      DynamicJsonDocument responseDoc(1500);
+      JsonObject responseObj = responseDoc.to<JsonObject>();
+      
+      responseObj["teamId"] = "A31";
+      responseObj["id"] = id_sensor;
+      JsonObject responseObject1 = responseObj.createNestedObject("averages");
+      responseObject1["Intensitate Luminoasa"] = x;
+
+      String responseString;
+      serializeJson(responseDoc, responseString);
+
+      pcharacteristic->setValue(responseString.c_str());
+      pcharacteristic->notify();
+}
+
+class CharacteristicsCallbacks: public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *characteristic) {
+
+      std::string data = characteristic->getValue();
+      Serial.println(data.c_str()); 
+
+      DynamicJsonDocument jsonDocument (1500);
+
+
+      DeserializationError error = deserializeJson(jsonDocument, data.c_str());
+      
+      const char* action = jsonDocument["action"];
+      const char* teamId = jsonDocument["teamId"];
+      int id_sensor = jsonDocument["id"];
+      int number = jsonDocument["number"];
+      if(jsonDocument["action"] == "getSensors")
+        getSensors(characteristic, jsonDocument);
+      
+      if(jsonDocument["id"].as<int>() == 1)
+      {
+          if(jsonDocument["action"] == "getValues")
+            gaz(characteristic, jsonDocument);
+      }
+
+      if(jsonDocument["id"].as<int>() == 2)
+      {
+        if(jsonDocument["action"] == "getValues")
+            lumina1(characteristic, jsonDocument);
+        if(jsonDocument["action"] == "getAverages")
+            lumina2(characteristic, jsonDocument);
+      }
+
+    }
+};
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(sensor1, INPUT);      
+  pinMode(sensor2, INPUT);
+  BLEDevice::init(bleServerName);
+
+  BLEServer *pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  BLEService *bleService = pServer->createService(SERVICE_UUID);
+
+  bleService->addCharacteristic(&characteristic);  
+  characteristic.addDescriptor(characteristicDescriptor);
+
+  characteristic.setCallbacks(new CharacteristicsCallbacks());
+  
+  bleService->start();
+
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pServer->getAdvertising()->start();
+  Serial.println("Waiting a client connection to notify...");
+}
+
+void loop() {
+
+}
